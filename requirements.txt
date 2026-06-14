@@ -1,0 +1,24 @@
+# ===== Core Data =====
+akshare>=1.13.0        # A 股数据源(东方财富接口)
+pandas>=2.0.0
+numpy>=1.24.0
+tqdm>=4.65.0           # 进度条
+
+# ===== Web Backend =====
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+
+# ===== Visualization (backtest & charts) =====
+matplotlib>=3.7.0
+# ECharts 通过前端 CDN 加载,无需 Python 端
+
+# ===== Testing =====
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# ===== Code Quality =====
+# 选装,本地开发时建议安装
+# black>=23.0.0
+# ruff>=0.1.0
+# mypy>=1.7.0

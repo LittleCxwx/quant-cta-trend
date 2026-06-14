@@ -1,0 +1,105 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ===== Virtual env =====
+venv/
+env/
+.venv/
+.env
+ENV/
+env.bak/
+venv.bak/
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# ===== Jupyter =====
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+*.ipynb_checkpoints
+
+# ===== Testing / Coverage =====
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+tests/.pytest_cache/
+
+# ===== Logs =====
+*.log
+logs/
+*.pid
+*.seed
+
+# ===== Data & Cache =====
+# 大数据文件不进 git(避免仓库膨胀)
+data/stock_daily_data/
+data/all_stocks_daily.csv
+data/A股_日行情_年报_流通市值.csv
+data/stock_zh_a_spot_em.csv
+data/stock_zh_a_spot_em_filtered.csv
+data/stock_zh_a_spot_em_filtered_with_suffix.csv
+data/stock_zh_a_hist_000001.csv
+data/trading_records*.xlsx
+data/trading_records.csv
+data/.downloaded.txt
+data/.fetched_*.json
+data/__pycache__/
+
+# 增量爬取进度文件
+*.fetched
+
+# ===== Trading & ML artifacts =====
+*.parquet
+*.feather
+*.h5
+*.pkl
+*.pickle
+models/
+
+# ===== Web frontend =====
+web/static/node_modules/
+web/static/dist/
+web/.vite/
+web/__pycache__/
+web/backend/__pycache__/
+
+# ===== MCP =====
+.mcp/
+*.sock
+
+# ===== Data =====
+data/

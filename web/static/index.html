@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>量化策略 · 选股 / 回测 / 信号</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <!-- ECharts: 通过 CDN 加载,无 npm 依赖 -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>量化策略 · A 股小市值轮动</h1>
+    <div class="header-meta">
+      <span id="data-status">数据状态: 加载中…</span>
+      <button class="btn-secondary" id="btn-refresh-status">刷新</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="select">📊 选股</button>
+    <button class="tab" data-tab="backtest">📈 回测</button>
+    <button class="tab" data-tab="signals">🚦 交易信号</button>
+    <button class="tab" data-tab="data">⚙️ 数据</button>
+  </nav>
+
+  <main>
+    <!-- ===== Tab 1: 选股 ===== -->
+    <section class="tab-panel active" id="tab-select">
+      <div class="panel-grid">
+        <aside class="panel-side">
+          <h2>单日选股</h2>
+          <form id="form-select">
+            <label>目标日期
+              <input type="date" name="date" required />
+            </label>
+            <label>Top N
+              <input type="number" name="num" value="5" min="1" max="20" />
+            </label>
+            <label>ROE 阈值 (%)
+              <input type="number" name="roe" value="10" step="0.1" />
+            </label>
+            <label>EPS 阈值
+              <input type="number" name="eps" value="0" step="0.01" />
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" name="include_st" />
+              包含 ST / *ST
+            </label>
+            <button type="submit" class="btn-primary">运行选股</button>
+          </form>
+        </aside>
+        <div class="panel-main">
+          <h2>候选股 <small id="select-meta"></small></h2>
+          <table class="data-table" id="table-select">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>代码</th>
+                <th>名称</th>
+                <th>收盘</th>
+                <th>EPS</th>
+                <th>ROE %</th>
+                <th>流通市值(亿)</th>
+                <th>权重</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Tab 2: 回测 ===== -->
+    <section class="tab-panel" id="tab-backtest">
+      <div class="panel-grid">
+        <aside class="panel-side">
+          <h2>回测参数</h2>
+          <form id="form-backtest">
+            <label>起始 <input type="date" name="start" value="2018-01-01" /></label>
+            <label>结束 <input type="date" name="end" value="2025-12-31" /></label>
+            <label>Top N <input type="number" name="num" value="5" /></label>
+            <label>初始资金 <input type="number" name="cash" value="10000" step="100" /></label>
+            <label>ROE 阈值 % <input type="number" name="roe" value="10" step="0.1" /></label>
+            <label>EPS 阈值 <input type="number" name="eps" value="0" step="0.01" /></label>
+            <label>手续费 ‱ <input type="number" name="c_rate" value="0.12" step="0.01" /></label>
+            <label>印花税 ‰ <input type="number" name="t_rate" value="1.0" step="0.1" /></label>
+            <label class="checkbox">
+              <input type="checkbox" name="include_st" /> 包含 ST
+            </label>
+            <button type="submit" class="btn-primary">运行回测</button>
+          </form>
+        </aside>
+        <div class="panel-main">
+          <h2>资金曲线 & 回撤</h2>
+          <div id="chart-backtest" class="chart-box"></div>
+
+          <h2>评价指标</h2>
+          <div class="metrics-grid" id="metrics"></div>
+
+          <h2>交易记录 <small id="trades-count"></small></h2>
+          <div class="table-scroll">
+            <table class="data-table" id="table-trades">
+              <thead>
+                <tr>
+                  <th>日期</th>
+                  <th>操作</th>
+                  <th>代码</th>
+                  <th>名称</th>
+                  <th>价格</th>
+                  <th>股数</th>
+                  <th>金额</th>
+                  <th>费用</th>
+                  <th>现金余额</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Tab 3: 交易信号 ===== -->
+    <section class="tab-panel" id="tab-signals">
+      <div class="panel-grid">
+        <aside class="panel-side">
+          <h2>盘后信号</h2>
+          <form id="form-signals">
+            <label>信号日 <input type="date" name="date" required /></label>
+            <label>Top N <input type="number" name="num" value="5" /></label>
+            <label>预算 (元) <input type="number" name="budget" value="100000" step="100" /></label>
+            <label>当前持仓
+              <input type="text" name="holdings" placeholder="code:shares,code:shares" />
+            </label>
+            <small class="hint">如 600519:100,000001:200</small>
+            <button type="submit" class="btn-primary">生成信号</button>
+          </form>
+        </aside>
+        <div class="panel-main">
+          <h2>今日应执行的操作 <small id="signal-meta"></small></h2>
+          <div id="signal-summary" class="summary-box"></div>
+
+          <h3>🟢 买入 (BUY)</h3>
+          <table class="data-table" id="table-buy">
+            <thead><tr><th>代码</th><th>名称</th><th>价格</th><th>股数</th><th>金额</th><th>原因</th></tr></thead>
+            <tbody></tbody>
+          </table>
+
+          <h3>🔴 卖出 (SELL)</h3>
+          <table class="data-table" id="table-sell">
+            <thead><tr><th>代码</th><th>名称</th><th>价格</th><th>股数</th><th>金额</th><th>原因</th></tr></thead>
+            <tbody></tbody>
+          </table>
+
+          <h3>⚪ 持有 (HOLD)</h3>
+          <table class="data-table" id="table-hold">
+            <thead><tr><th>代码</th><th>名称</th><th>价格</th><th>股数</th><th>原因</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Tab 4: 数据状态 ===== -->
+    <section class="tab-panel" id="tab-data">
+      <h2>数据状态</h2>
+      <pre id="data-detail" class="code-block">加载中…</pre>
+
+      <h2>更新数据</h2>
+      <p>建议在终端运行(浏览器无文件系统访问权限):</p>
+      <pre class="code-block"># 增量更新日线 + 流通市值
+python -m scripts.cli update --start 2026-01-01
+
+# 如果还要刷新最新年报
+python -m scripts.cli update --start 2026-01-01 --with-annual
+
+# 重跑某只股票(慎用)
+python -m scripts.cli update --start 2026-01-01 --codes 600519 --reset</pre>
+    </section>
+  </main>
+
+  <footer>
+    <span>quant-cta-trend</span> · <a href="https://github.com/anomalyco/opencode" target="_blank">Docs</a>
+    · 本工具仅供学习研究,不构成投资建议
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
