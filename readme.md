@@ -27,6 +27,11 @@ python -m scripts.cli backtest --start 2018-01-01 --output data/result.json
 # 4. 看今天该买/卖什么
 python -m scripts.cli signals --date 2026-06-07 --budget 100000
 
+# 如需用 JSON 文件维护持仓:
+python -m scripts.cli signals --date 2026-06-04 --budget 100000 --save-positions
+python -m scripts.cli signals --date 2026-06-10 --budget 100000 --positions-file data/positions.json --save-positions
+# 新版 positions.json 会保存 shares/cost_price/cost_amount,卖出时打印估算盈利或亏损。
+
 # 5. 选 Top 5 候选股
 python -m scripts.cli select --date 2026-06-07 --num 5
 

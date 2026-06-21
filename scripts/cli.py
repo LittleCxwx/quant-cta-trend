@@ -23,7 +23,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from scripts.common import DATA_DIR, logger
+from scripts.common import DATA_DIR, logger, normalize_code
+
+
+DEFAULT_POSITIONS_FILE = DATA_DIR / "positions.json"
+PositionRecord = dict[str, int | float | str | None]
 
 
 def _cmd_update(args: argparse.Namespace) -> int:
@@ -79,28 +83,330 @@ def _cmd_select(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_holdings(text: str | None) -> dict[str, int]:
+    """解析 CLI 持仓字符串: code:shares,code:shares。"""
+    if not text:
+        return {}
+
+    positions: dict[str, int] = {}
+    for token in text.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            code, shares = token.split(":", maxsplit=1)
+            shares_int = int(shares.strip())
+        except ValueError as exc:
+            raise ValueError("holdings 格式错误,应为 code:shares,code:shares") from exc
+        if shares_int < 0:
+            raise ValueError("holdings 股数不能为负数")
+        if shares_int == 0:
+            continue
+        positions[normalize_code(code)] = shares_int
+    return positions
+
+
+def _position_records_to_holdings(records: dict[str, PositionRecord]) -> dict[str, int]:
+    """从持仓明细中提取策略只需要的 code -> shares。"""
+    return {
+        code: int(record["shares"])
+        for code, record in records.items()
+        if int(record.get("shares") or 0) > 0
+    }
+
+
+def _normalize_position_records(raw: dict) -> dict[str, PositionRecord]:
+    """校验并规范化 JSON 持仓明细,兼容旧格式 {"000001": 100}。"""
+    records: dict[str, PositionRecord] = {}
+    for code, value in raw.items():
+        code_str = str(code).strip()
+        if not code_str:
+            raise ValueError("positions 文件包含空股票代码")
+        record: PositionRecord = {}
+        if isinstance(value, dict):
+            if "shares" not in value:
+                raise ValueError(f"positions 文件中 {code_str} 缺少 shares")
+            shares = value["shares"]
+            name = value.get("name")
+            cost_price = value.get("cost_price")
+            cost_amount = value.get("cost_amount")
+        else:
+            shares = value
+            name = None
+            cost_price = None
+            cost_amount = None
+
+        try:
+            shares_int = int(shares)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"positions 文件中 {code_str} 的股数不是整数") from exc
+        if shares_int < 0:
+            raise ValueError(f"positions 文件中 {code_str} 的股数不能为负数")
+        if shares_int == 0:
+            continue
+
+        record["shares"] = shares_int
+        if name:
+            record["name"] = str(name)
+
+        cost_price_float: float | None = None
+        cost_amount_float: float | None = None
+        if cost_price is not None:
+            try:
+                cost_price_float = float(cost_price)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"positions 文件中 {code_str} 的 cost_price 不是数字") from exc
+            if cost_price_float < 0:
+                raise ValueError(f"positions 文件中 {code_str} 的 cost_price 不能为负数")
+        if cost_amount is not None:
+            try:
+                cost_amount_float = float(cost_amount)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"positions 文件中 {code_str} 的 cost_amount 不是数字") from exc
+            if cost_amount_float < 0:
+                raise ValueError(f"positions 文件中 {code_str} 的 cost_amount 不能为负数")
+
+        if cost_price_float is None and cost_amount_float is not None:
+            cost_price_float = cost_amount_float / shares_int
+        if cost_amount_float is None and cost_price_float is not None:
+            cost_amount_float = cost_price_float * shares_int
+        if cost_price_float is not None:
+            record["cost_price"] = round(cost_price_float, 4)
+        if cost_amount_float is not None:
+            record["cost_amount"] = round(cost_amount_float, 2)
+
+        records[normalize_code(code_str)] = record
+    return records
+
+
+def _normalize_positions(raw: dict) -> dict[str, int]:
+    """校验并规范化 JSON 持仓映射。"""
+    return _position_records_to_holdings(_normalize_position_records(raw))
+
+
+def _load_positions(path: Path) -> dict[str, int]:
+    """从 JSON 文件读取持仓。支持 {"000001": 100} 或 {"positions": {...}}。"""
+    return _position_records_to_holdings(_load_position_records(path))
+
+
+def _load_position_records(path: Path) -> dict[str, PositionRecord]:
+    """从 JSON 文件读取持仓明细。"""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"positions 文件不是合法 JSON: {path}") from exc
+
+    if isinstance(raw, dict) and "positions" in raw and isinstance(raw["positions"], dict):
+        raw = raw["positions"]
+    if not isinstance(raw, dict):
+        raise ValueError("positions 文件格式错误,应为 {\"000001\": 100}")
+    return _normalize_position_records(raw)
+
+
+def _save_positions(path: Path, positions: dict[str, int]) -> None:
+    """保存持仓 JSON。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    clean = dict(sorted(_normalize_positions(positions).items()))
+    path.write_text(
+        json.dumps(clean, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _save_position_records(path: Path, records: dict[str, PositionRecord]) -> None:
+    """保存带成本的持仓明细 JSON。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    clean = dict(sorted(_normalize_position_records(records).items()))
+    path.write_text(
+        json.dumps(clean, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _apply_signals_to_positions(
+    held_positions: dict[str, int],
+    sigs,
+) -> dict[str, int]:
+    """按买卖信号更新持仓。卖出移除/扣减,买入累加,无法卖出的 hold 保留。"""
+    positions = dict(held_positions)
+
+    for action in sigs.sell_list:
+        shares = int(action.shares)
+        if shares <= 0:
+            continue
+        code = normalize_code(action.code)
+        remain = positions.get(code, 0) - shares
+        if remain > 0:
+            positions[code] = remain
+        else:
+            positions.pop(code, None)
+
+    for action in sigs.buy_list:
+        shares = int(action.shares)
+        if shares <= 0:
+            continue
+        code = normalize_code(action.code)
+        positions[code] = positions.get(code, 0) + shares
+
+    return dict(sorted((c, s) for c, s in positions.items() if s > 0))
+
+
+def _apply_signals_to_position_records(
+    position_records: dict[str, PositionRecord],
+    sigs,
+) -> dict[str, PositionRecord]:
+    """按买卖信号更新持仓明细,并在买入时记录均价成本。"""
+    records = _normalize_position_records(position_records)
+
+    for action in sigs.sell_list:
+        shares = int(action.shares)
+        if shares <= 0:
+            continue
+        code = normalize_code(action.code)
+        record = records.get(code)
+        if not record:
+            continue
+        held_shares = int(record["shares"])
+        remain = held_shares - shares
+        if remain <= 0:
+            records.pop(code, None)
+            continue
+        record["shares"] = remain
+        cost_price = record.get("cost_price")
+        if cost_price is not None:
+            record["cost_amount"] = round(float(cost_price) * remain, 2)
+        records[code] = record
+
+    for action in sigs.buy_list:
+        shares = int(action.shares)
+        if shares <= 0:
+            continue
+        code = normalize_code(action.code)
+        price = float(action.price) if action.price is not None else None
+        amount = float(action.amount) if action.amount else (
+            price * shares if price is not None else None
+        )
+        record = records.get(code, {"shares": 0})
+        old_shares = int(record.get("shares") or 0)
+        new_shares = old_shares + shares
+        record["shares"] = new_shares
+        if action.name:
+            record["name"] = action.name
+
+        old_cost_amount = record.get("cost_amount")
+        if old_shares == 0 and amount is not None:
+            record["cost_amount"] = round(amount, 2)
+            record["cost_price"] = round(amount / shares, 4)
+        elif old_cost_amount is not None and amount is not None:
+            new_cost_amount = float(old_cost_amount) + amount
+            record["cost_amount"] = round(new_cost_amount, 2)
+            record["cost_price"] = round(new_cost_amount / new_shares, 4)
+        else:
+            record.pop("cost_amount", None)
+            record.pop("cost_price", None)
+        records[code] = record
+
+    return dict(sorted(records.items()))
+
+
+def _sell_pnl_text(action, position_records: dict[str, PositionRecord]) -> str:
+    """生成卖出动作的估算盈亏说明。"""
+    code = normalize_code(action.code)
+    record = position_records.get(code)
+    if not record or record.get("cost_price") is None:
+        return "估算盈亏: 成本未知"
+    if action.price is None:
+        return "估算盈亏: 卖出参考价未知"
+
+    shares = int(action.shares)
+    cost_price = float(record["cost_price"])
+    cost_amount = cost_price * shares
+    sell_amount = float(action.price) * shares
+    pnl = sell_amount - cost_amount
+    pnl_pct = pnl / cost_amount * 100 if cost_amount else 0.0
+    label = "盈利" if pnl >= 0 else "亏损"
+    return f"估算{label} ¥{abs(pnl):.2f} ({pnl_pct:+.2f}%, 成本 ¥{cost_price:.2f})"
+
+
+def _signals_dict_with_pnl(sigs, position_records: dict[str, PositionRecord]) -> dict:
+    """给 JSON 输出补充卖出盈亏字段。"""
+    data = sigs.to_dict()
+    for action in data["sell_list"]:
+        code = normalize_code(action["code"])
+        record = position_records.get(code)
+        price = action.get("price")
+        shares = int(action.get("shares") or 0)
+        if not record or record.get("cost_price") is None or price is None or shares <= 0:
+            action["pnl_status"] = "unknown"
+            action["pnl_reason"] = "成本未知" if not record or record.get("cost_price") is None else "卖出参考价未知"
+            continue
+        cost_price = float(record["cost_price"])
+        cost_amount = cost_price * shares
+        sell_amount = float(price) * shares
+        pnl = sell_amount - cost_amount
+        action["cost_price"] = round(cost_price, 4)
+        action["cost_amount"] = round(cost_amount, 2)
+        action["pnl"] = round(pnl, 2)
+        action["pnl_pct"] = round(pnl / cost_amount * 100, 4) if cost_amount else 0.0
+        action["pnl_status"] = "profit" if pnl >= 0 else "loss"
+    return data
+
+
+def _positions_file_arg(path_arg: str | None) -> Path:
+    return Path(path_arg) if path_arg else DEFAULT_POSITIONS_FILE
+
+
 def _cmd_signals(args: argparse.Namespace) -> int:
     from scripts.strategy import get_signals_for_date
-    held = {}
-    if args.holdings:
-        # 解析 "code:shares,code:shares"
-        for token in args.holdings.split(","):
-            c, s = token.split(":")
-            held[c.strip()] = int(s)
+
+    positions_file = _positions_file_arg(args.positions_file)
+    position_records: dict[str, PositionRecord] = {}
+    held: dict[str, int] = {}
+    if args.positions_file or args.save_positions:
+        if positions_file.exists():
+            try:
+                position_records.update(_load_position_records(positions_file))
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            held.update(_position_records_to_holdings(position_records))
+            logger.info("已读取持仓 %s: %d 只", positions_file, len(held))
+        elif not args.save_positions:
+            print(f"positions 文件不存在: {positions_file}", file=sys.stderr)
+            return 2
+
+    try:
+        cli_holdings = _parse_holdings(args.holdings)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    held.update(cli_holdings)
+    for code, shares in cli_holdings.items():
+        position_records[code] = {"shares": shares}
+
     sigs = get_signals_for_date(
         date=args.date, select_stock_num=args.num,
         budget=args.budget, held_positions=held or None,
     )
     if args.format == "json":
-        print(sigs.to_json(indent=2))
+        print(json.dumps(_signals_dict_with_pnl(sigs, position_records), ensure_ascii=False, indent=2))
     else:
         print(sigs.summary)
         for a in sigs.buy_list:
             print(f"  🟢 BUY  {a.code} {a.name} {a.shares}股 @¥{a.price}  ({a.reason})")
         for a in sigs.sell_list:
-            print(f"  🔴 SELL {a.code} {a.name} {a.shares}股 @¥{a.price}  ({a.reason})")
+            pnl_text = _sell_pnl_text(a, position_records)
+            print(f"  🔴 SELL {a.code} {a.name} {a.shares}股 @¥{a.price}  ({a.reason}; {pnl_text})")
         for a in sigs.hold_list:
             print(f"  ⚪ HOLD {a.code} {a.name} {a.shares}股  ({a.reason})")
+    if args.save_positions:
+        updated = _apply_signals_to_position_records(position_records, sigs)
+        try:
+            _save_position_records(positions_file, updated)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        logger.info("已保存持仓到 %s: %d 只", positions_file, len(updated))
     return 0
 
 
@@ -188,6 +494,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="周四买入的预算(元)")
     p_sig.add_argument("--holdings", default=None,
                         help="当前持仓 code:shares,code:shares")
+    p_sig.add_argument("--positions-file", default=None,
+                        help="持仓 JSON 文件,支持 {\"000001\": 100} 或带 cost_price 的明细")
+    p_sig.add_argument("--save-positions", action="store_true",
+                        help="按本次买卖信号更新并保存持仓(默认 data/positions.json)")
     p_sig.add_argument("--format", choices=["text", "json"], default="text")
     p_sig.set_defaults(func=_cmd_signals)
 

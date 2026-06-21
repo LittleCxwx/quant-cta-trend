@@ -35,6 +35,10 @@ python -m scripts.cli select --date 2025-12-25 --num 5 [--format json] [--output
 # 盘后信号
 python -m scripts.cli signals --date 2025-12-25 --budget 100000 \
                               --holdings "600519:100,000001:200" [--format json]
+python -m scripts.cli signals --date 2025-12-25 --budget 100000 \
+                              --positions-file data/positions.json --save-positions
+# data/positions.json 支持旧格式 {"000001": 100};
+# 用 --save-positions 新写入时会保存 shares/cost_price/cost_amount,卖出时显示估算盈亏。
 
 # 回测
 python -m scripts.cli backtest --start 2018-01-01 --end 2025-12-31 \
